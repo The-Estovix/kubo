@@ -1,11 +1,12 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { LogOut, Users } from "lucide-react";
 import type { ReactNode } from "react";
+import { ChatSidebar } from "@/components/ChatSidebar";
 
 export function AppShell({ children }: { children: ReactNode }) {
-  const { profile, role, signOut } = useAuth();
+  const { profile, role, isAdmin, signOut } = useAuth();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -20,7 +21,15 @@ export function AppShell({ children }: { children: ReactNode }) {
           <Link to="/dashboard" className="font-display text-base font-semibold tracking-tight">
             Tasks
           </Link>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <Link to="/users">
+                <Button variant="ghost" size="sm" className="gap-2">
+                  <Users className="h-4 w-4" />
+                  <span className="hidden sm:inline">Users</span>
+                </Button>
+              </Link>
+            )}
             {profile && (
               <div className="hidden text-right sm:block">
                 <div className="text-sm font-medium leading-tight">{profile.first_name}</div>
@@ -35,6 +44,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+      <ChatSidebar />
     </div>
   );
 }
