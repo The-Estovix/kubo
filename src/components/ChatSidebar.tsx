@@ -3,7 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, X, Search, Send, ArrowLeft } from "lucide-react";
+import { MessageCircle, X, Search, Send, ArrowLeft, Globe } from "lucide-react";
 
 interface ChatUser {
   id: string;
@@ -21,40 +21,56 @@ interface Message {
   created_at: string;
 }
 
+interface GlobalMessage {
+  id: string;
+  sender_id: string;
+  content: string;
+  created_at: string;
+}
+
+type ActivePeer = ChatUser | { id: "__global__" };
+
 export function ChatSidebar() {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [users, setUsers] = useState<ChatUser[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [activePeer, setActivePeer] = useState<ChatUser | null>(null);
+  const [globalMessages, setGlobalMessages] = useState<GlobalMessage[]>([]);
+  const [activePeer, setActivePeer] = useState<ActivePeer | null>(null);
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Load users + all messages involving me
+  const isGlobal = activePeer?.id === "__global__";
+  const peerUser = activePeer && !isGlobal ? (activePeer as ChatUser) : null;
+
+  // Load users, DMs, and global messages
   useEffect(() => {
     if (!user) return;
     (async () => {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id, first_name, last_name, email")
-        .neq("id", user.id);
+      const [{ data: profs }, { data: msgs }, { data: globals }] = await Promise.all([
+        supabase.from("profiles").select("id, first_name, last_name, email").neq("id", user.id),
+        supabase
+          .from("chat_messages")
+          .select("*")
+          .or(`sender_id.eq.${user.id},recipient_id.eq.${user.id}`)
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("global_messages")
+          .select("*")
+          .order("created_at", { ascending: true }),
+      ]);
       setUsers((profs ?? []) as ChatUser[]);
-
-      const { data: msgs } = await supabase
-        .from("chat_messages")
-        .select("*")
-        .or(`sender_id.eq.${user.id},recipient_id.eq.${user.id}`)
-        .order("created_at", { ascending: true });
       setMessages((msgs ?? []) as Message[]);
+      setGlobalMessages((globals ?? []) as GlobalMessage[]);
     })();
   }, [user]);
 
-  // Realtime subscription
+  // Realtime: DMs + global
   useEffect(() => {
     if (!user) return;
     const channel = supabase
-      .channel("chat-messages")
+      .channel("chat-all")
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "chat_messages" },
@@ -73,17 +89,25 @@ export function ChatSidebar() {
           setMessages((prev) => prev.map((x) => (x.id === m.id ? m : x)));
         },
       )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "global_messages" },
+        (payload) => {
+          const g = payload.new as GlobalMessage;
+          setGlobalMessages((prev) => (prev.find((x) => x.id === g.id) ? prev : [...prev, g]));
+        },
+      )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
   }, [user]);
 
-  // Mark messages from active peer as read
+  // Mark DMs from active peer as read
   useEffect(() => {
-    if (!user || !activePeer || !open) return;
+    if (!user || !peerUser || !open) return;
     const unread = messages.filter(
-      (m) => m.sender_id === activePeer.id && m.recipient_id === user.id && !m.read_at,
+      (m) => m.sender_id === peerUser.id && m.recipient_id === user.id && !m.read_at,
     );
     if (unread.length === 0) return;
     supabase
@@ -94,12 +118,11 @@ export function ChatSidebar() {
         unread.map((m) => m.id),
       )
       .then(() => {});
-  }, [activePeer, messages, user, open]);
+  }, [peerUser, messages, user, open]);
 
-  // Auto-scroll
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, activePeer]);
+  }, [messages, globalMessages, activePeer]);
 
   const unreadTotal = useMemo(
     () => messages.filter((m) => m.recipient_id === user?.id && !m.read_at).length,
@@ -146,24 +169,39 @@ export function ChatSidebar() {
   }, [users, search, unreadByUser, lastByUser]);
 
   const conversation = useMemo(() => {
-    if (!activePeer || !user) return [];
+    if (!peerUser || !user) return [];
     return messages.filter(
       (m) =>
-        (m.sender_id === user.id && m.recipient_id === activePeer.id) ||
-        (m.sender_id === activePeer.id && m.recipient_id === user.id),
+        (m.sender_id === user.id && m.recipient_id === peerUser.id) ||
+        (m.sender_id === peerUser.id && m.recipient_id === user.id),
     );
-  }, [messages, activePeer, user]);
+  }, [messages, peerUser, user]);
+
+  const userMap = useMemo(() => {
+    const map = new Map<string, ChatUser>();
+    for (const u of users) map.set(u.id, u);
+    return map;
+  }, [users]);
+
+  const lastGlobal = globalMessages[globalMessages.length - 1];
 
   const send = async () => {
     if (!user || !activePeer || !draft.trim()) return;
     const content = draft.trim();
     setDraft("");
-    const { error } = await supabase.from("chat_messages").insert({
-      sender_id: user.id,
-      recipient_id: activePeer.id,
-      content,
-    });
-    if (error) setDraft(content);
+    if (isGlobal) {
+      const { error } = await supabase
+        .from("global_messages")
+        .insert({ sender_id: user.id, content });
+      if (error) setDraft(content);
+    } else if (peerUser) {
+      const { error } = await supabase.from("chat_messages").insert({
+        sender_id: user.id,
+        recipient_id: peerUser.id,
+        content,
+      });
+      if (error) setDraft(content);
+    }
   };
 
   if (!user) return null;
@@ -201,7 +239,11 @@ export function ChatSidebar() {
                   </button>
                 )}
                 <h2 className="font-display text-base font-semibold tracking-tight">
-                  {activePeer ? `${activePeer.first_name} ${activePeer.last_name}` : "Messages"}
+                  {isGlobal
+                    ? "Global chat"
+                    : peerUser
+                      ? `${peerUser.first_name} ${peerUser.last_name}`
+                      : "Messages"}
                 </h2>
               </div>
               <button
@@ -227,6 +269,26 @@ export function ChatSidebar() {
                   </div>
                 </div>
                 <div className="flex-1 overflow-y-auto">
+                  <button
+                    onClick={() => setActivePeer({ id: "__global__" })}
+                    className="flex w-full items-center gap-3 border-b border-border bg-accent/30 px-4 py-3 text-left transition-colors hover:bg-accent"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                      <Globe className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-sm font-medium">Global chat</div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        {lastGlobal
+                          ? `${
+                              lastGlobal.sender_id === user.id
+                                ? "You"
+                                : userMap.get(lastGlobal.sender_id)?.first_name ?? "Someone"
+                            }: ${lastGlobal.content}`
+                          : "Everyone can see these messages"}
+                      </div>
+                    </div>
+                  </button>
                   {filteredUsers.length === 0 ? (
                     <div className="p-6 text-center text-sm text-muted-foreground">No users found.</div>
                   ) : (
@@ -269,7 +331,44 @@ export function ChatSidebar() {
             ) : (
               <>
                 <div ref={scrollRef} className="flex-1 space-y-2 overflow-y-auto p-4">
-                  {conversation.length === 0 ? (
+                  {isGlobal ? (
+                    globalMessages.length === 0 ? (
+                      <div className="py-10 text-center text-sm text-muted-foreground">
+                        No messages yet. Say hi to everyone!
+                      </div>
+                    ) : (
+                      globalMessages.map((m) => {
+                        const mine = m.sender_id === user.id;
+                        const sender = userMap.get(m.sender_id);
+                        const name = mine
+                          ? "You"
+                          : sender
+                            ? `${sender.first_name} ${sender.last_name}`
+                            : "Unknown";
+                        return (
+                          <div
+                            key={m.id}
+                            className={`flex flex-col ${mine ? "items-end" : "items-start"}`}
+                          >
+                            {!mine && (
+                              <div className="mb-0.5 px-1 text-[10px] font-medium text-muted-foreground">
+                                {name}
+                              </div>
+                            )}
+                            <div
+                              className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${
+                                mine
+                                  ? "bg-foreground text-background"
+                                  : "bg-muted text-foreground"
+                              }`}
+                            >
+                              {m.content}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )
+                  ) : conversation.length === 0 ? (
                     <div className="py-10 text-center text-sm text-muted-foreground">
                       Start the conversation.
                     </div>
@@ -305,7 +404,7 @@ export function ChatSidebar() {
                   <Input
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
-                    placeholder="Type a message…"
+                    placeholder={isGlobal ? "Message everyone…" : "Type a message…"}
                     autoFocus
                   />
                   <Button type="submit" size="icon" disabled={!draft.trim()}>
