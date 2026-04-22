@@ -441,7 +441,6 @@ export function ChatSidebar() {
                     })}
                   </ul>
                 )}
-                {days_helper_unused()}
               </div>
             ) : !activePeer ? (
               <>
@@ -611,5 +610,3 @@ export function ChatSidebar() {
   );
 }
 
-// no-op to avoid unused-import warnings on some helpers used conditionally
-function days_helper_unused() { return null; }
