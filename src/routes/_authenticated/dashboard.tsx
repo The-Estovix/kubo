@@ -14,8 +14,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { ProgressBar } from "@/components/ProgressBar";
-import { Plus, FolderOpen, Search, X, Check } from "lucide-react";
+import { Plus, FolderOpen, Search, X, Check, Clock, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { daysUntil, formatDeadline, deadlineLabel, deadlineTone } from "@/lib/deadline";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
   component: DashboardPage,
@@ -27,6 +28,7 @@ interface ProjectWithProgress {
   name: string;
   description: string;
   status: string;
+  deadline: string | null;
   total: number;
   completed: number;
   memberIds: string[];
@@ -34,10 +36,19 @@ interface ProjectWithProgress {
   createdBy: string;
 }
 
+interface PendingTask {
+  id: string;
+  title: string;
+  status: string;
+  deadline: string | null;
+  project_id: string;
+  project_name: string;
+}
+
 async function fetchProjects(): Promise<ProjectWithProgress[]> {
   const { data: projects, error } = await supabase
     .from("projects")
-    .select("id, name, description, status, created_by")
+    .select("id, name, description, status, created_by, deadline")
     .order("created_at", { ascending: false });
   if (error) throw error;
   if (!projects || projects.length === 0) return [];
@@ -61,6 +72,7 @@ async function fetchProjects(): Promise<ProjectWithProgress[]> {
       name: p.name,
       description: p.description ?? "",
       status: p.status,
+      deadline: p.deadline ?? null,
       total: ts.length,
       completed,
       memberIds,
@@ -92,8 +104,41 @@ function DashboardPage() {
     return m;
   }, [profiles]);
 
+  // My pending tasks
+  const pendingQ = useQuery({
+    queryKey: ["my-pending-tasks", user?.id],
+    enabled: !!user,
+    queryFn: async (): Promise<PendingTask[]> => {
+      const { data, error } = await supabase
+        .from("tasks")
+        .select("id, title, status, deadline, project_id, projects(name)")
+        .eq("assignee_id", user!.id)
+        .in("status", ["NOT_STARTED", "ACTIVE"]);
+      if (error) throw error;
+      const rows = (data ?? []) as Array<{
+        id: string; title: string; status: string; deadline: string | null;
+        project_id: string; projects: { name: string } | null;
+      }>;
+      return rows
+        .map((r) => ({
+          id: r.id,
+          title: r.title,
+          status: r.status,
+          deadline: r.deadline,
+          project_id: r.project_id,
+          project_name: r.projects?.name ?? "Project",
+        }))
+        .sort((a, b) => {
+          // tasks with deadline first, soonest at top; no-deadline last
+          if (a.deadline && b.deadline) return a.deadline.localeCompare(b.deadline);
+          if (a.deadline) return -1;
+          if (b.deadline) return 1;
+          return 0;
+        });
+    },
+  });
+
   const [search, setSearch] = useState("");
-  // filter: "all" | "me" | userId
   const [filter, setFilter] = useState<string>("all");
 
   const otherUsers = useMemo(
@@ -108,7 +153,6 @@ function DashboardPage() {
         (p) => p.memberIds.includes(user.id) || p.assigneeIds.includes(user.id),
       );
     } else if (filter !== "all") {
-      // Show projects where this user is a member OR has any task (including completed) assigned
       list = list.filter(
         (p) => p.memberIds.includes(filter) || p.assigneeIds.includes(filter),
       );
@@ -122,8 +166,10 @@ function DashboardPage() {
     return list;
   }, [projects, filter, search, user]);
 
+  const pending = pendingQ.data ?? [];
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="font-display text-3xl font-semibold tracking-tight">
@@ -169,75 +215,173 @@ function DashboardPage() {
         </div>
       )}
 
-      {isLoading ? (
-        <div className="text-sm text-muted-foreground">Loading projects…</div>
-      ) : projects.length === 0 ? (
-        <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card/40 py-20 text-center">
-          <FolderOpen className="mb-3 h-10 w-10 text-muted-foreground" />
-          <div className="font-display text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            No current project
+      {/* PROJECTS SECTION */}
+      <section className="space-y-4">
+        <h2 className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+          Projects
+        </h2>
+        {isLoading ? (
+          <div className="text-sm text-muted-foreground">Loading projects…</div>
+        ) : projects.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-card/40 py-20 text-center">
+            <FolderOpen className="mb-3 h-10 w-10 text-muted-foreground" />
+            <div className="font-display text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              No current project
+            </div>
+            {isAdmin && (
+              <p className="mt-2 text-sm text-muted-foreground">Click “Add project” to create one.</p>
+            )}
           </div>
-          {isAdmin && (
-            <p className="mt-2 text-sm text-muted-foreground">Click “Add project” to create one.</p>
-          )}
-        </div>
-      ) : visibleProjects.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-border bg-card/40 py-12 text-center text-sm text-muted-foreground">
-          No projects match your filters.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {visibleProjects.map((p) => {
-            const pct = p.total === 0 ? 0 : (p.completed / p.total) * 100;
-            const isActive = p.total > 0 && p.completed < p.total;
-            const memberPreview = p.memberIds
-              .map((id) => profilesById.get(id))
-              .filter(Boolean)
-              .slice(0, 3) as Profile[];
-            return (
-              <Link
-                key={p.id}
-                to="/projects/$id"
-                params={{ id: p.id }}
-                className={`group rounded-xl border bg-card p-5 transition-all hover:-translate-y-0.5 hover:shadow-sm ${
-                  isActive ? "border-foreground/15" : "border-border"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="font-display text-base font-semibold tracking-tight group-hover:underline underline-offset-4">
-                    {p.name}
-                  </h3>
-                  {isActive && (
-                    <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--status-active)]" />
+        ) : visibleProjects.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card/40 py-12 text-center text-sm text-muted-foreground">
+            No projects match your filters.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {visibleProjects.map((p) => {
+              const pct = p.total === 0 ? 0 : (p.completed / p.total) * 100;
+              const isActive = p.total > 0 && p.completed < p.total;
+              const memberPreview = p.memberIds
+                .map((id) => profilesById.get(id))
+                .filter(Boolean)
+                .slice(0, 3) as Profile[];
+              const tone = deadlineTone(p.deadline);
+              return (
+                <Link
+                  key={p.id}
+                  to="/projects/$id"
+                  params={{ id: p.id }}
+                  className={`group rounded-xl border bg-card p-5 transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                    isActive ? "border-foreground/15" : "border-border"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <h3 className="font-display text-base font-semibold tracking-tight group-hover:underline underline-offset-4">
+                      {p.name}
+                    </h3>
+                    {isActive && (
+                      <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--status-active)]" />
+                    )}
+                  </div>
+                  {p.description && (
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
                   )}
-                </div>
-                {p.description && (
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
-                )}
-                <div className="mt-2 text-xs text-muted-foreground">
-                  {p.completed} / {p.total} tasks complete
-                </div>
-                <div className="mt-4">
-                  <ProgressBar value={pct} />
-                  <div className="mt-1.5 text-right text-xs font-medium text-muted-foreground">
-                    {Math.round(pct)}%
+                  <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                    <span>{p.completed} / {p.total} tasks</span>
+                    {p.deadline && (
+                      <>
+                        <span>·</span>
+                        <span
+                          className={
+                            tone === "overdue"
+                              ? "text-destructive"
+                              : tone === "soon"
+                                ? "text-foreground"
+                                : ""
+                          }
+                        >
+                          {formatDeadline(p.deadline)}
+                        </span>
+                      </>
+                    )}
                   </div>
-                </div>
-                {memberPreview.length > 0 && (
-                  <div className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                    <span>Team:</span>
-                    <span className="text-foreground">
-                      {memberPreview.map((m) => m.first_name).join(", ")}
-                      {p.memberIds.length > memberPreview.length &&
-                        ` +${p.memberIds.length - memberPreview.length}`}
-                    </span>
+                  <div className="mt-4">
+                    <ProgressBar value={pct} />
+                    <div className="mt-1.5 text-right text-xs font-medium text-muted-foreground">
+                      {Math.round(pct)}%
+                    </div>
                   </div>
-                )}
-              </Link>
-            );
-          })}
+                  {memberPreview.length > 0 && (
+                    <div className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span>Team:</span>
+                      <span className="text-foreground">
+                        {memberPreview.map((m) => m.first_name).join(", ")}
+                        {p.memberIds.length > memberPreview.length &&
+                          ` +${p.memberIds.length - memberPreview.length}`}
+                      </span>
+                    </div>
+                  )}
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* MY PENDING TASKS — separate section */}
+      <section className="space-y-4">
+        <div className="flex items-end justify-between gap-3">
+          <div>
+            <h2 className="font-display text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              My focus queue
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Pending tasks assigned to you, soonest deadline first.
+            </p>
+          </div>
+          <span className="text-xs text-muted-foreground">{pending.length} open</span>
         </div>
-      )}
+        {pendingQ.isLoading ? (
+          <div className="text-sm text-muted-foreground">Loading your tasks…</div>
+        ) : pending.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border bg-card/40 py-10 text-center text-sm text-muted-foreground">
+            Inbox zero — no pending tasks. ✨
+          </div>
+        ) : (
+          <ul className="overflow-hidden rounded-xl border border-border bg-card divide-y divide-border">
+            {pending.map((t) => {
+              const tone = deadlineTone(t.deadline);
+              const days = daysUntil(t.deadline);
+              return (
+                <li key={t.id}>
+                  <Link
+                    to="/projects/$id"
+                    params={{ id: t.project_id }}
+                    className="flex items-center justify-between gap-4 p-4 transition-colors hover:bg-accent/40"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="truncate font-medium">{t.title}</span>
+                        {tone === "overdue" && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                            <AlertTriangle className="h-3 w-3" /> Overdue
+                          </span>
+                        )}
+                        {tone === "soon" && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-foreground/10 px-1.5 py-0.5 text-[10px] font-medium">
+                            <Clock className="h-3 w-3" /> Due soon
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                        {t.project_name}
+                      </div>
+                    </div>
+                    <div className="text-right text-xs">
+                      <div
+                        className={
+                          tone === "overdue"
+                            ? "font-medium text-destructive"
+                            : tone === "soon"
+                              ? "font-medium"
+                              : "text-muted-foreground"
+                        }
+                      >
+                        {t.deadline ? formatDeadline(t.deadline) : "No deadline"}
+                      </div>
+                      {days !== null && (
+                        <div className="text-[11px] text-muted-foreground">
+                          {deadlineLabel(t.deadline)}
+                        </div>
+                      )}
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }
@@ -247,11 +391,11 @@ function NewProjectDialog({ profiles, userId }: { profiles: Profile[]; userId: s
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [deadline, setDeadline] = useState("");
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const [memberQuery, setMemberQuery] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // Always include creator as a member
   const effectiveMembers = useMemo(() => {
     const set = new Set(memberIds);
     set.add(userId);
@@ -273,6 +417,7 @@ function NewProjectDialog({ profiles, userId }: { profiles: Profile[]; userId: s
   const reset = () => {
     setName("");
     setDescription("");
+    setDeadline("");
     setMemberIds([]);
     setMemberQuery("");
   };
@@ -281,7 +426,12 @@ function NewProjectDialog({ profiles, userId }: { profiles: Profile[]; userId: s
     mutationFn: async () => {
       const { data: project, error } = await supabase
         .from("projects")
-        .insert({ name, description, created_by: userId })
+        .insert({
+          name,
+          description,
+          created_by: userId,
+          deadline: deadline ? new Date(deadline).toISOString() : null,
+        })
         .select("id")
         .single();
       if (error) throw error;
@@ -306,7 +456,7 @@ function NewProjectDialog({ profiles, userId }: { profiles: Profile[]; userId: s
   };
 
   const toggle = (id: string) => {
-    if (id === userId) return; // creator always included
+    if (id === userId) return;
     setMemberIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   };
 
@@ -341,6 +491,17 @@ function NewProjectDialog({ profiles, userId }: { profiles: Profile[]; userId: s
               placeholder="Brief description of the project…"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="pdeadline">
+              Deadline <span className="text-muted-foreground">(optional)</span>
+            </Label>
+            <Input
+              id="pdeadline"
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
             />
           </div>
           <div className="space-y-1.5">
