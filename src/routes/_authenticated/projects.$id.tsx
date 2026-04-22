@@ -36,9 +36,25 @@ function ProjectDetailPage() {
   const projectQ = useQuery({
     queryKey: ["project", id],
     queryFn: async () => {
-      const { data, error } = await supabase.from("projects").select("id, name, status").eq("id", id).single();
+      const { data, error } = await supabase
+        .from("projects")
+        .select("id, name, description, status")
+        .eq("id", id)
+        .single();
       if (error) throw error;
       return data;
+    },
+  });
+
+  const membersQ = useQuery({
+    queryKey: ["project-members", id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("project_members")
+        .select("user_id")
+        .eq("project_id", id);
+      if (error) throw error;
+      return (data ?? []).map((r) => r.user_id);
     },
   });
 
