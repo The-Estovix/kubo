@@ -86,10 +86,40 @@ export type Database = {
         }
         Relationships: []
       }
+      project_members: {
+        Row: {
+          created_at: string
+          id: string
+          project_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          project_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          project_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_members_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           created_at: string
           created_by: string
+          description: string
           id: string
           name: string
           status: Database["public"]["Enums"]["project_status"]
@@ -97,6 +127,7 @@ export type Database = {
         Insert: {
           created_at?: string
           created_by: string
+          description?: string
           id?: string
           name: string
           status?: Database["public"]["Enums"]["project_status"]
@@ -104,6 +135,7 @@ export type Database = {
         Update: {
           created_at?: string
           created_by?: string
+          description?: string
           id?: string
           name?: string
           status?: Database["public"]["Enums"]["project_status"]
@@ -182,6 +214,10 @@ export type Database = {
           _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
         }
+        Returns: boolean
+      }
+      is_project_member: {
+        Args: { _project_id: string; _user_id: string }
         Returns: boolean
       }
     }
