@@ -86,6 +86,13 @@ function ProjectDetailPage() {
     return m;
   }, [profilesQ.data]);
 
+  const memberProfiles = useMemo(() => {
+    const ids = membersQ.data ?? [];
+    return ids
+      .map((uid) => profilesById.get(uid))
+      .filter((p): p is Profile => Boolean(p));
+  }, [membersQ.data, profilesById]);
+
   const tasks = tasksQ.data ?? [];
   const completed = tasks.filter((t) => t.status === "COMPLETED").length;
   const pct = tasks.length === 0 ? 0 : (completed / tasks.length) * 100;
@@ -125,12 +132,30 @@ function ProjectDetailPage() {
             <h1 className="font-display text-3xl font-semibold tracking-tight">
               {projectQ.data?.name ?? "…"}
             </h1>
-            <div className="mt-1 text-sm text-muted-foreground">
+            {projectQ.data?.description && (
+              <p className="mt-1.5 max-w-2xl text-sm text-muted-foreground">
+                {projectQ.data.description}
+              </p>
+            )}
+            <div className="mt-2 text-sm text-muted-foreground">
               {completed} of {tasks.length} tasks complete
             </div>
           </div>
-          {isAdmin && <AddTaskButton projectId={id} profiles={profilesQ.data ?? []} />}
+          {isAdmin && <AddTaskButton projectId={id} members={memberProfiles} />}
         </div>
+        {memberProfiles.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <span className="text-xs uppercase tracking-wider text-muted-foreground">Team</span>
+            {memberProfiles.map((m) => (
+              <span
+                key={m.id}
+                className="inline-flex items-center rounded-full border border-border bg-muted/40 px-2 py-0.5 text-xs"
+              >
+                {m.first_name} {m.last_name}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="mt-5 max-w-xl">
           <ProgressBar value={pct} />
           <div className="mt-1.5 text-right text-xs font-medium text-muted-foreground">{Math.round(pct)}%</div>
@@ -174,7 +199,7 @@ function ProjectDetailPage() {
                     task={t}
                     isAdmin={isAdmin}
                     isMine={mine}
-                    profiles={profilesQ.data ?? []}
+                    members={memberProfiles}
                     onUpdate={(patch) => updateTask.mutate({ id: t.id, patch })}
                   />
                 </li>
@@ -188,12 +213,12 @@ function ProjectDetailPage() {
 }
 
 function TaskActions({
-  task, isAdmin, isMine, profiles, onUpdate,
+  task, isAdmin, isMine, members, onUpdate,
 }: {
   task: Task;
   isAdmin: boolean;
   isMine: boolean;
-  profiles: Profile[];
+  members: Profile[];
   onUpdate: (patch: Partial<Task>) => void;
 }) {
   const [reassignOpen, setReassignOpen] = useState(false);
@@ -223,7 +248,7 @@ function TaskActions({
                 <DialogTitle>{task.status === "UNASSIGNED" ? "Assign task" : "Reassign task"}</DialogTitle>
               </DialogHeader>
               <AssigneePicker
-                profiles={profiles}
+                profiles={members}
                 onPick={(p) => {
                   onUpdate({ assignee_id: p.id });
                   setReassignOpen(false);
@@ -241,46 +266,59 @@ function AssigneePicker({
   profiles, onPick,
 }: { profiles: Profile[]; onPick: (p: Profile) => void }) {
   const [q, setQ] = useState("");
-  const filtered = profiles.filter((p) =>
-    p.first_name.toLowerCase().includes(q.toLowerCase()),
-  );
+  const filtered = profiles.filter((p) => {
+    const term = q.toLowerCase();
+    return (
+      p.first_name.toLowerCase().includes(term) ||
+      p.last_name.toLowerCase().includes(term) ||
+      p.email.toLowerCase().includes(term)
+    );
+  });
   return (
     <div className="space-y-3">
-      <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          autoFocus
-          placeholder="Search by first name…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="pl-9"
-        />
-      </div>
-      <div className="max-h-72 overflow-y-auto rounded-md border border-border">
-        {filtered.length === 0 ? (
-          <div className="p-4 text-center text-sm text-muted-foreground">No matches</div>
-        ) : (
-          <ul className="divide-y divide-border">
-            {filtered.map((p) => (
-              <li key={p.id}>
-                <button
-                  type="button"
-                  onClick={() => onPick(p)}
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-accent"
-                >
-                  <span className="font-medium">{p.first_name} {p.last_name}</span>
-                  <span className="text-xs text-muted-foreground">{p.email}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {profiles.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
+          No team members on this project yet. Add members to the project first.
+        </div>
+      ) : (
+        <>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              autoFocus
+              placeholder="Search team…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto rounded-md border border-border">
+            {filtered.length === 0 ? (
+              <div className="p-4 text-center text-sm text-muted-foreground">No matches</div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {filtered.map((p) => (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => onPick(p)}
+                      className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-accent"
+                    >
+                      <span className="font-medium">{p.first_name} {p.last_name}</span>
+                      <span className="text-xs text-muted-foreground">{p.email}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function AddTaskButton({ projectId, profiles }: { projectId: string; profiles: Profile[] }) {
+function AddTaskButton({ projectId, members }: { projectId: string; members: Profile[] }) {
   const { user } = useAuth();
   const qc = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -325,7 +363,9 @@ function AddTaskButton({ projectId, profiles }: { projectId: string; profiles: P
             <Input id="ttl" required value={title} onChange={(e) => setTitle(e.target.value)} autoFocus />
           </div>
           <div className="space-y-1.5">
-            <Label>Assign to <span className="text-muted-foreground">(optional)</span></Label>
+            <Label>
+              Assign to <span className="text-muted-foreground">(optional, team only)</span>
+            </Label>
             {assignee ? (
               <div className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2">
                 <div className="text-sm">
@@ -337,7 +377,7 @@ function AddTaskButton({ projectId, profiles }: { projectId: string; profiles: P
                 </button>
               </div>
             ) : (
-              <AssigneePicker profiles={profiles} onPick={setAssignee} />
+              <AssigneePicker profiles={members} onPick={setAssignee} />
             )}
           </div>
           <DialogFooter>
