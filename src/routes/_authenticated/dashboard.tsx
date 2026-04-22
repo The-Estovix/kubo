@@ -104,9 +104,14 @@ function DashboardPage() {
   const visibleProjects = useMemo(() => {
     let list = projects;
     if (filter === "me" && user) {
-      list = list.filter((p) => p.memberIds.includes(user.id));
+      list = list.filter(
+        (p) => p.memberIds.includes(user.id) || p.assigneeIds.includes(user.id),
+      );
     } else if (filter !== "all") {
-      list = list.filter((p) => p.memberIds.includes(filter));
+      // Show projects where this user is a member OR has any task (including completed) assigned
+      list = list.filter(
+        (p) => p.memberIds.includes(filter) || p.assigneeIds.includes(filter),
+      );
     }
     const q = search.trim().toLowerCase();
     if (q) {
