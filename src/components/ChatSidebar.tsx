@@ -3,7 +3,10 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { MessageCircle, X, Search, Send, ArrowLeft, Globe } from "lucide-react";
+import { MessageCircle, X, Search, Send, ArrowLeft, Globe, Bell, AlertTriangle, Clock, CalendarDays } from "lucide-react";
+import { toast } from "sonner";
+import { daysUntil, formatDeadline, deadlineLabel, deadlineTone } from "@/lib/deadline";
+import { Link } from "@tanstack/react-router";
 
 interface ChatUser {
   id: string;
@@ -28,23 +31,42 @@ interface GlobalMessage {
   created_at: string;
 }
 
+interface ReminderItem {
+  kind: "project" | "task";
+  id: string;
+  title: string;
+  subtitle: string;
+  deadline: string;
+  projectId: string;
+}
+
+type Tab = "chats" | "reminders";
 type ActivePeer = ChatUser | { id: "__global__" };
+
+const NOTIFICATION_PREFIXES = ["✅ ", "📁 ", "🚫 "];
+
+function isNotification(content: string): boolean {
+  return NOTIFICATION_PREFIXES.some((p) => content.startsWith(p));
+}
 
 export function ChatSidebar() {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("chats");
   const [users, setUsers] = useState<ChatUser[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [globalMessages, setGlobalMessages] = useState<GlobalMessage[]>([]);
+  const [reminders, setReminders] = useState<ReminderItem[]>([]);
   const [activePeer, setActivePeer] = useState<ActivePeer | null>(null);
   const [search, setSearch] = useState("");
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const seenMessageIds = useRef<Set<string>>(new Set());
 
   const isGlobal = activePeer?.id === "__global__";
   const peerUser = activePeer && !isGlobal ? (activePeer as ChatUser) : null;
 
-  // Load users, DMs, and global messages
+  // Initial load
   useEffect(() => {
     if (!user) return;
     (async () => {
@@ -61,12 +83,73 @@ export function ChatSidebar() {
           .order("created_at", { ascending: true }),
       ]);
       setUsers((profs ?? []) as ChatUser[]);
-      setMessages((msgs ?? []) as Message[]);
+      const initial = (msgs ?? []) as Message[];
+      setMessages(initial);
+      initial.forEach((m) => seenMessageIds.current.add(m.id));
       setGlobalMessages((globals ?? []) as GlobalMessage[]);
     })();
   }, [user]);
 
-  // Realtime: DMs + global
+  // Load reminders (deadlines within 3 days, including overdue) — for projects I'm in & tasks assigned to me
+  const loadReminders = async () => {
+    if (!user) return;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() + 3);
+    const cutoffIso = cutoff.toISOString();
+
+    const [{ data: memberships }, { data: myTasks }] = await Promise.all([
+      supabase.from("project_members").select("project_id").eq("user_id", user.id),
+      supabase
+        .from("tasks")
+        .select("id, title, deadline, project_id, projects(name)")
+        .eq("assignee_id", user.id)
+        .in("status", ["NOT_STARTED", "ACTIVE"])
+        .not("deadline", "is", null)
+        .lte("deadline", cutoffIso),
+    ]);
+
+    const projectIds = (memberships ?? []).map((m) => m.project_id);
+    let projectRows: Array<{ id: string; name: string; deadline: string }> = [];
+    if (projectIds.length > 0) {
+      const { data: projs } = await supabase
+        .from("projects")
+        .select("id, name, deadline")
+        .in("id", projectIds)
+        .not("deadline", "is", null)
+        .lte("deadline", cutoffIso);
+      projectRows = (projs ?? []) as Array<{ id: string; name: string; deadline: string }>;
+    }
+
+    const items: ReminderItem[] = [
+      ...projectRows.map((p) => ({
+        kind: "project" as const,
+        id: p.id,
+        title: p.name,
+        subtitle: "Project deadline",
+        deadline: p.deadline,
+        projectId: p.id,
+      })),
+      ...((myTasks ?? []) as Array<{
+        id: string; title: string; deadline: string; project_id: string;
+        projects: { name: string } | null;
+      }>).map((t) => ({
+        kind: "task" as const,
+        id: t.id,
+        title: t.title,
+        subtitle: t.projects?.name ?? "Task",
+        deadline: t.deadline,
+        projectId: t.project_id,
+      })),
+    ].sort((a, b) => a.deadline.localeCompare(b.deadline));
+
+    setReminders(items);
+  };
+
+  useEffect(() => { loadReminders(); }, [user]);
+  // Refresh reminders when sidebar opened
+  useEffect(() => { if (open) loadReminders(); }, [open]);
+
+  // Realtime channels
   useEffect(() => {
     if (!user) return;
     const channel = supabase
@@ -76,8 +159,16 @@ export function ChatSidebar() {
         { event: "INSERT", schema: "public", table: "chat_messages" },
         (payload) => {
           const m = payload.new as Message;
-          if (m.sender_id === user.id || m.recipient_id === user.id) {
-            setMessages((prev) => (prev.find((x) => x.id === m.id) ? prev : [...prev, m]));
+          if (m.sender_id !== user.id && m.recipient_id !== user.id) return;
+          if (seenMessageIds.current.has(m.id)) return;
+          seenMessageIds.current.add(m.id);
+          setMessages((prev) => [...prev, m]);
+
+          // Toast for incoming notifications/messages from others
+          if (m.recipient_id === user.id && m.sender_id !== user.id) {
+            if (isNotification(m.content)) {
+              toast(m.content);
+            }
           }
         },
       )
@@ -97,15 +188,25 @@ export function ChatSidebar() {
           setGlobalMessages((prev) => (prev.find((x) => x.id === g.id) ? prev : [...prev, g]));
         },
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "tasks" },
+        () => loadReminders(),
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "projects" },
+        () => loadReminders(),
+      )
       .subscribe();
     return () => {
       supabase.removeChannel(channel);
     };
   }, [user]);
 
-  // Mark DMs from active peer as read
+  // Mark DMs read
   useEffect(() => {
-    if (!user || !peerUser || !open) return;
+    if (!user || !peerUser || !open || tab !== "chats") return;
     const unread = messages.filter(
       (m) => m.sender_id === peerUser.id && m.recipient_id === user.id && !m.read_at,
     );
@@ -113,12 +214,9 @@ export function ChatSidebar() {
     supabase
       .from("chat_messages")
       .update({ read_at: new Date().toISOString() })
-      .in(
-        "id",
-        unread.map((m) => m.id),
-      )
+      .in("id", unread.map((m) => m.id))
       .then(() => {});
-  }, [peerUser, messages, user, open]);
+  }, [peerUser, messages, user, open, tab]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
@@ -128,6 +226,8 @@ export function ChatSidebar() {
     () => messages.filter((m) => m.recipient_id === user?.id && !m.read_at).length,
     [messages, user],
   );
+
+  const reminderCount = reminders.length;
 
   const unreadByUser = useMemo(() => {
     const map = new Map<string, number>();
@@ -206,6 +306,8 @@ export function ChatSidebar() {
 
   if (!user) return null;
 
+  const totalBadge = unreadTotal + reminderCount;
+
   return (
     <>
       <button
@@ -214,9 +316,9 @@ export function ChatSidebar() {
         aria-label="Open chat"
       >
         <MessageCircle className="h-5 w-5" />
-        {unreadTotal > 0 && (
+        {totalBadge > 0 && (
           <span className="absolute -right-1 -top-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-500 px-1.5 text-[10px] font-semibold text-white">
-            {unreadTotal > 99 ? "99+" : unreadTotal}
+            {totalBadge > 99 ? "99+" : totalBadge}
           </span>
         )}
       </button>
@@ -229,7 +331,7 @@ export function ChatSidebar() {
           >
             <div className="flex items-center justify-between border-b border-border px-4 py-3">
               <div className="flex items-center gap-2">
-                {activePeer && (
+                {activePeer && tab === "chats" && (
                   <button
                     onClick={() => setActivePeer(null)}
                     className="rounded-md p-1 hover:bg-accent"
@@ -239,11 +341,13 @@ export function ChatSidebar() {
                   </button>
                 )}
                 <h2 className="font-display text-base font-semibold tracking-tight">
-                  {isGlobal
-                    ? "Global chat"
-                    : peerUser
-                      ? `${peerUser.first_name} ${peerUser.last_name}`
-                      : "Messages"}
+                  {tab === "reminders"
+                    ? "Reminders"
+                    : isGlobal
+                      ? "Global chat"
+                      : peerUser
+                        ? `${peerUser.first_name} ${peerUser.last_name}`
+                        : "Messages"}
                 </h2>
               </div>
               <button
@@ -255,7 +359,91 @@ export function ChatSidebar() {
               </button>
             </div>
 
-            {!activePeer ? (
+            {/* Tabs */}
+            <div className="flex border-b border-border">
+              <button
+                onClick={() => { setTab("chats"); }}
+                className={`flex flex-1 items-center justify-center gap-2 py-2.5 text-sm transition-colors ${
+                  tab === "chats" ? "border-b-2 border-foreground font-medium" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <MessageCircle className="h-4 w-4" /> Chats
+                {unreadTotal > 0 && (
+                  <span className="rounded-full bg-red-500 px-1.5 text-[10px] font-semibold text-white">
+                    {unreadTotal}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => { setTab("reminders"); setActivePeer(null); }}
+                className={`flex flex-1 items-center justify-center gap-2 py-2.5 text-sm transition-colors ${
+                  tab === "reminders" ? "border-b-2 border-foreground font-medium" : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Bell className="h-4 w-4" /> Reminders
+                {reminderCount > 0 && (
+                  <span className="rounded-full bg-red-500 px-1.5 text-[10px] font-semibold text-white">
+                    {reminderCount}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {tab === "reminders" ? (
+              <div className="flex-1 overflow-y-auto">
+                {reminders.length === 0 ? (
+                  <div className="p-8 text-center text-sm text-muted-foreground">
+                    <Bell className="mx-auto mb-2 h-8 w-8 opacity-30" />
+                    No deadlines in the next 3 days.
+                  </div>
+                ) : (
+                  <ul className="divide-y divide-border">
+                    {reminders.map((r) => {
+                      const tone = deadlineTone(r.deadline);
+                      const days = daysUntil(r.deadline);
+                      return (
+                        <li key={`${r.kind}-${r.id}`}>
+                          <Link
+                            to="/projects/$id"
+                            params={{ id: r.projectId }}
+                            onClick={() => setOpen(false)}
+                            className="block px-4 py-3 transition-colors hover:bg-accent"
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5">
+                                  {tone === "overdue" ? (
+                                    <AlertTriangle className="h-3.5 w-3.5 text-destructive" />
+                                  ) : (
+                                    <Clock className="h-3.5 w-3.5 text-muted-foreground" />
+                                  )}
+                                  <span className="truncate text-sm font-medium">{r.title}</span>
+                                </div>
+                                <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                                  <span className="uppercase tracking-wider">{r.kind}</span>
+                                  <span>·</span>
+                                  <span className="truncate">{r.subtitle}</span>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <div className={`text-xs font-medium ${tone === "overdue" ? "text-destructive" : ""}`}>
+                                  {deadlineLabel(r.deadline)}
+                                </div>
+                                <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                                  <CalendarDays className="h-3 w-3" />
+                                  {formatDeadline(r.deadline)}
+                                </div>
+                              </div>
+                            </div>
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {days_helper_unused()}
+              </div>
+            ) : !activePeer ? (
               <>
                 <div className="border-b border-border p-3">
                   <div className="relative">
@@ -375,6 +563,7 @@ export function ChatSidebar() {
                   ) : (
                     conversation.map((m) => {
                       const mine = m.sender_id === user.id;
+                      const notif = !mine && isNotification(m.content);
                       return (
                         <div
                           key={m.id}
@@ -382,9 +571,11 @@ export function ChatSidebar() {
                         >
                           <div
                             className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${
-                              mine
-                                ? "bg-foreground text-background"
-                                : "bg-muted text-foreground"
+                              notif
+                                ? "border border-border bg-accent/40 text-foreground"
+                                : mine
+                                  ? "bg-foreground text-background"
+                                  : "bg-muted text-foreground"
                             }`}
                           >
                             {m.content}
@@ -419,3 +610,6 @@ export function ChatSidebar() {
     </>
   );
 }
+
+// no-op to avoid unused-import warnings on some helpers used conditionally
+function days_helper_unused() { return null; }
