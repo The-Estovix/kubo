@@ -30,6 +30,7 @@ interface ProjectWithProgress {
   total: number;
   completed: number;
   memberIds: string[];
+  assigneeIds: string[];
   createdBy: string;
 }
 
@@ -42,7 +43,7 @@ async function fetchProjects(): Promise<ProjectWithProgress[]> {
   if (!projects || projects.length === 0) return [];
 
   const [{ data: tasks, error: tErr }, { data: members, error: mErr }] = await Promise.all([
-    supabase.from("tasks").select("project_id, status"),
+    supabase.from("tasks").select("project_id, status, assignee_id"),
     supabase.from("project_members").select("project_id, user_id"),
   ]);
   if (tErr) throw tErr;
@@ -52,6 +53,9 @@ async function fetchProjects(): Promise<ProjectWithProgress[]> {
     const ts = (tasks ?? []).filter((t) => t.project_id === p.id);
     const completed = ts.filter((t) => t.status === "COMPLETED").length;
     const memberIds = (members ?? []).filter((m) => m.project_id === p.id).map((m) => m.user_id);
+    const assigneeIds = Array.from(
+      new Set(ts.map((t) => t.assignee_id).filter((x): x is string => !!x)),
+    );
     return {
       id: p.id,
       name: p.name,
@@ -60,6 +64,7 @@ async function fetchProjects(): Promise<ProjectWithProgress[]> {
       total: ts.length,
       completed,
       memberIds,
+      assigneeIds,
       createdBy: p.created_by,
     };
   });
@@ -99,9 +104,14 @@ function DashboardPage() {
   const visibleProjects = useMemo(() => {
     let list = projects;
     if (filter === "me" && user) {
-      list = list.filter((p) => p.memberIds.includes(user.id));
+      list = list.filter(
+        (p) => p.memberIds.includes(user.id) || p.assigneeIds.includes(user.id),
+      );
     } else if (filter !== "all") {
-      list = list.filter((p) => p.memberIds.includes(filter));
+      // Show projects where this user is a member OR has any task (including completed) assigned
+      list = list.filter(
+        (p) => p.memberIds.includes(filter) || p.assigneeIds.includes(filter),
+      );
     }
     const q = search.trim().toLowerCase();
     if (q) {
