@@ -119,6 +119,7 @@ export type Database = {
         Row: {
           created_at: string
           created_by: string
+          deadline: string | null
           description: string
           id: string
           name: string
@@ -127,6 +128,7 @@ export type Database = {
         Insert: {
           created_at?: string
           created_by: string
+          deadline?: string | null
           description?: string
           id?: string
           name: string
@@ -135,6 +137,7 @@ export type Database = {
         Update: {
           created_at?: string
           created_by?: string
+          deadline?: string | null
           description?: string
           id?: string
           name?: string
@@ -147,6 +150,7 @@ export type Database = {
           assigned_by: string
           assignee_id: string | null
           created_at: string
+          deadline: string | null
           id: string
           project_id: string
           status: Database["public"]["Enums"]["task_status"]
@@ -157,6 +161,7 @@ export type Database = {
           assigned_by: string
           assignee_id?: string | null
           created_at?: string
+          deadline?: string | null
           id?: string
           project_id: string
           status?: Database["public"]["Enums"]["task_status"]
@@ -167,6 +172,7 @@ export type Database = {
           assigned_by?: string
           assignee_id?: string | null
           created_at?: string
+          deadline?: string | null
           id?: string
           project_id?: string
           status?: Database["public"]["Enums"]["task_status"]
