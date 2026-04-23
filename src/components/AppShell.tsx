@@ -1,12 +1,14 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { LogOut, Users } from "lucide-react";
+import { LogOut, Moon, Sun, Users } from "lucide-react";
 import type { ReactNode } from "react";
 import { ChatSidebar } from "@/components/ChatSidebar";
+import { useTheme } from "@/lib/theme";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const { profile, role, isAdmin, signOut } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
 
   const handleLogout = async () => {
@@ -36,6 +38,16 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <div className="text-xs capitalize text-muted-foreground leading-tight">{role}</div>
               </div>
             )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={toggleTheme}
+              className="gap-2"
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+            >
+              {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Button>
             <Button variant="ghost" size="sm" onClick={handleLogout} className="gap-2">
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline">Logout</span>
