@@ -4,7 +4,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import FRONTEND_ORIGINS
+from app.core.config import FRONTEND_ORIGIN
 from app.routers import auth, chat, profiles, project_members, projects, reminders, tasks, users
 
 
@@ -19,19 +19,18 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="TeamConnect Backend API", version="1.0.0", lifespan=lifespan)
 
-local_dev_origins = [
-  "http://localhost:8080",
-  "http://127.0.0.1:8080",
-  "http://127.0.0.1:8081",
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-]
-
 app.add_middleware(
   CORSMiddleware,
-  allow_origins=[*FRONTEND_ORIGINS, *local_dev_origins],
+  allow_origins=[
+    FRONTEND_ORIGIN,
+    "http://localhost:8080",
+    "http://127.0.0.1:8080",
+    "http://127.0.0.1:8081",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+  ],
   allow_credentials=True,
   allow_methods=["*"],
   allow_headers=["*"],
