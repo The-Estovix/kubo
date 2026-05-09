@@ -37,10 +37,6 @@ app.add_middleware(
   allow_headers=["*"],
 )
 
-@app.get("/")
-async def root() -> dict[str, str]:
-  return {"service": "TeamConnect Backend API", "status": "ok"}
-
 @app.get("/health")
 async def health() -> dict[str, str]:
   return {"status": "ok"}
