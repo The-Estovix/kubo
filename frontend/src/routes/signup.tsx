@@ -13,6 +13,7 @@ function SignupPage() {
   const navigate = useNavigate();
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -36,6 +37,7 @@ function SignupPage() {
           data: {
             first_name: firstName.trim(),
             last_name: lastName.trim(),
+            username: username.trim(),
           },
           emailRedirectTo: window.location.origin,
         },
@@ -76,6 +78,10 @@ function SignupPage() {
               <Label htmlFor="ln">Last name</Label>
               <Input id="ln" required value={lastName} onChange={(e) => setLastName(e.target.value)} />
             </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="username">Username</Label>
+            <Input id="username" required value={username} onChange={(e) => setUsername(e.target.value)} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>
