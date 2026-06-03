@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request
 
 from app.schemas.tasks import CreateTaskRequest, UpdateTaskRequest
-from app.services.supabase_rest import insert_rows, select_rows, update_rows
+from app.services.supabase_rest import delete_rows, insert_rows, select_rows, update_rows
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -56,6 +56,16 @@ async def update_task(request: Request, task_id: str, body: UpdateTaskRequest) -
     request,
     "tasks",
     body.patch,
+    filters={"id": task_id},
+  )
+  return {"ok": True}
+
+
+@router.delete("/{task_id}")
+async def delete_task(request: Request, task_id: str) -> dict:
+  await delete_rows(
+    request,
+    "tasks",
     filters={"id": task_id},
   )
   return {"ok": True}

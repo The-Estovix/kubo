@@ -10,10 +10,21 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { ProgressBar } from "@/components/ProgressBar";
-import { Plus, FolderOpen, Search, X, Check, Clock, AlertTriangle } from "lucide-react";
+import { Plus, FolderOpen, Search, X, Check, Clock, AlertTriangle, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { daysUntil, formatDeadline, deadlineLabel, deadlineTone } from "@/lib/deadline";
 import { backendApi } from "@/lib/backend-api";
@@ -99,6 +110,7 @@ async function fetchProjects(token?: string): Promise<ProjectWithProgress[]> {
 
 function DashboardPage() {
   const { profile, isAdmin, user, session } = useAuth();
+  const qc = useQueryClient();
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ["projects-with-progress"],
     queryFn: () => fetchProjects(session?.access_token),
@@ -118,6 +130,18 @@ function DashboardPage() {
     profiles.forEach((p) => m.set(p.id, p));
     return m;
   }, [profiles]);
+
+  const deleteProject = useMutation({
+    mutationFn: async (projectId: string) => {
+      await backendApi.delete(`/api/projects/${projectId}`, session?.access_token);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects-with-progress"] });
+      qc.invalidateQueries({ queryKey: ["my-pending-tasks"] });
+      toast.success("Project deleted");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
 
   // My pending tasks
   const pendingQ = useQuery({
@@ -257,61 +281,74 @@ function DashboardPage() {
                 .slice(0, 3) as Profile[];
               const tone = deadlineTone(p.deadline);
               return (
-                <Link
+                <div
                   key={p.id}
-                  to="/projects/$id"
-                  params={{ id: p.id }}
-                  className={`group rounded-xl border bg-card p-5 transition-all hover:-translate-y-0.5 hover:shadow-sm ${
+                  className={`group relative rounded-xl border bg-card transition-all hover:-translate-y-0.5 hover:shadow-sm ${
                     isActive ? "border-foreground/15" : "border-border"
                   }`}
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <h3 className="font-display text-base font-semibold tracking-tight group-hover:underline underline-offset-4">
-                      {p.name}
-                    </h3>
-                    {isActive && (
-                      <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--status-active)]" />
+                  <Link
+                    to="/projects/$id"
+                    params={{ id: p.id }}
+                    className="block p-5"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <h3 className="pr-9 font-display text-base font-semibold tracking-tight group-hover:underline underline-offset-4">
+                        {p.name}
+                      </h3>
+                      {isActive && (
+                        <span className="mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-[color:var(--status-active)]" />
+                      )}
+                    </div>
+                    {p.description && (
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
                     )}
-                  </div>
-                  {p.description && (
-                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{p.description}</p>
-                  )}
-                  <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{p.completed} / {p.total} tasks</span>
-                    {p.deadline && (
-                      <>
-                        <span>·</span>
-                        <span
-                          className={
-                            tone === "overdue"
-                              ? "text-destructive"
-                              : tone === "soon"
-                                ? "text-foreground"
-                                : ""
-                          }
-                        >
-                          {formatDeadline(p.deadline)}
+                    <div className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
+                      <span>{p.completed} / {p.total} tasks</span>
+                      {p.deadline && (
+                        <>
+                          <span>·</span>
+                          <span
+                            className={
+                              tone === "overdue"
+                                ? "text-destructive"
+                                : tone === "soon"
+                                  ? "text-foreground"
+                                  : ""
+                            }
+                          >
+                            {formatDeadline(p.deadline)}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                    <div className="mt-4">
+                      <ProgressBar value={pct} />
+                      <div className="mt-1.5 text-right text-xs font-medium text-muted-foreground">
+                        {Math.round(pct)}%
+                      </div>
+                    </div>
+                    {memberPreview.length > 0 && (
+                      <div className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                        <span>Team:</span>
+                        <span className="text-foreground">
+                          {memberPreview.map((m) => m.first_name).join(", ")}
+                          {p.memberIds.length > memberPreview.length &&
+                            ` +${p.memberIds.length - memberPreview.length}`}
                         </span>
-                      </>
+                      </div>
                     )}
-                  </div>
-                  <div className="mt-4">
-                    <ProgressBar value={pct} />
-                    <div className="mt-1.5 text-right text-xs font-medium text-muted-foreground">
-                      {Math.round(pct)}%
-                    </div>
-                  </div>
-                  {memberPreview.length > 0 && (
-                    <div className="mt-3 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span>Team:</span>
-                      <span className="text-foreground">
-                        {memberPreview.map((m) => m.first_name).join(", ")}
-                        {p.memberIds.length > memberPreview.length &&
-                          ` +${p.memberIds.length - memberPreview.length}`}
-                      </span>
+                  </Link>
+                  {isAdmin && (
+                    <div className="absolute right-3 top-3">
+                      <DeleteProjectButton
+                        projectName={p.name}
+                        disabled={deleteProject.isPending}
+                        onConfirm={() => deleteProject.mutate(p.id)}
+                      />
                     </div>
                   )}
-                </Link>
+                </div>
               );
             })}
           </div>
@@ -393,6 +430,38 @@ function DashboardPage() {
         )}
       </section>
     </div>
+  );
+}
+
+function DeleteProjectButton({
+  projectName,
+  disabled,
+  onConfirm,
+}: {
+  projectName: string;
+  disabled?: boolean;
+  onConfirm: () => void;
+}) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button size="icon" variant="destructive" disabled={disabled} aria-label={`Delete ${projectName}`}>
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete project?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This will permanently delete {projectName} and all of its tasks.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 

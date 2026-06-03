@@ -1,4 +1,4 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState, useMemo, type FormEvent } from "react";
 import { useAuth } from "@/lib/auth";
@@ -8,9 +8,20 @@ import { Label } from "@/components/ui/label";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { ProgressBar } from "@/components/ProgressBar";
 import { StatusBadge, type TaskStatus } from "@/components/StatusBadge";
-import { ArrowLeft, Plus, Search, X, Check, Users, CalendarDays } from "lucide-react";
+import { ArrowLeft, Plus, Search, X, Check, Users, CalendarDays, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDeadline, deadlineTone, deadlineLabel } from "@/lib/deadline";
 import { backendApi } from "@/lib/backend-api";
@@ -40,6 +51,7 @@ function ProjectDetailPage() {
   const { id } = Route.useParams();
   const { isAdmin, user, session } = useAuth();
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const projectQ = useQuery({
     queryKey: ["project", id],
@@ -115,6 +127,44 @@ function ProjectDetailPage() {
     },
   });
 
+  const deleteTask = useMutation({
+    mutationFn: async (taskId: string) => {
+      await backendApi.delete(`/api/tasks/${taskId}`, session?.access_token);
+    },
+    onMutate: async (taskId) => {
+      await qc.cancelQueries({ queryKey: ["tasks", id] });
+      const prev = qc.getQueryData<Task[]>(["tasks", id]);
+      qc.setQueryData<Task[]>(["tasks", id], (old) => (old ?? []).filter((t) => t.id !== taskId));
+      return { prev };
+    },
+    onError: (err: Error, _taskId, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["tasks", id], ctx.prev);
+      toast.error(err.message);
+    },
+    onSuccess: () => toast.success("Task deleted"),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["tasks", id] });
+      qc.invalidateQueries({ queryKey: ["projects-with-progress"] });
+      qc.invalidateQueries({ queryKey: ["my-pending-tasks"] });
+    },
+  });
+
+  const deleteProject = useMutation({
+    mutationFn: async () => {
+      await backendApi.delete(`/api/projects/${id}`, session?.access_token);
+    },
+    onSuccess: async () => {
+      qc.removeQueries({ queryKey: ["project", id] });
+      qc.removeQueries({ queryKey: ["tasks", id] });
+      qc.removeQueries({ queryKey: ["project-members", id] });
+      qc.invalidateQueries({ queryKey: ["projects-with-progress"] });
+      qc.invalidateQueries({ queryKey: ["my-pending-tasks"] });
+      toast.success("Project deleted");
+      await navigate({ to: "/dashboard" });
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
   const projectTone = deadlineTone(projectQ.data?.deadline ?? null);
 
   return (
@@ -163,6 +213,15 @@ function ProjectDetailPage() {
               />
             )}
             {isAdmin && <AddTaskButton projectId={id} members={memberProfiles} />}
+            {isAdmin && (
+              <DeleteConfirmButton
+                label="Delete project"
+                title="Delete project?"
+                description="This will permanently delete the project and its tasks."
+                onConfirm={() => deleteProject.mutate()}
+                disabled={deleteProject.isPending}
+              />
+            )}
           </div>
         </div>
         {memberProfiles.length > 0 && (
@@ -238,6 +297,8 @@ function ProjectDetailPage() {
                     isMine={mine}
                     members={memberProfiles}
                     onUpdate={(patch) => updateTask.mutate({ id: t.id, patch })}
+                    onDelete={() => deleteTask.mutate(t.id)}
+                    deleting={deleteTask.isPending}
                   />
                 </li>
               );
@@ -250,18 +311,33 @@ function ProjectDetailPage() {
 }
 
 function TaskActions({
-  task, isAdmin, isMine, members, onUpdate,
+  task, isAdmin, isMine, members, onUpdate, onDelete, deleting,
 }: {
   task: Task;
   isAdmin: boolean;
   isMine: boolean;
   members: Profile[];
   onUpdate: (patch: Partial<Task>) => void;
+  onDelete: () => void;
+  deleting: boolean;
 }) {
   const [reassignOpen, setReassignOpen] = useState(false);
 
   if (task.status === "COMPLETED") {
-    return <span className="text-xs text-muted-foreground">Locked</span>;
+    return (
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">Locked</span>
+        {isAdmin && (
+          <DeleteConfirmButton
+            label="Delete"
+            title="Delete task?"
+            description="This task will be permanently deleted."
+            onConfirm={onDelete}
+            disabled={deleting}
+          />
+        )}
+      </div>
+    );
   }
 
   return (
@@ -293,7 +369,51 @@ function TaskActions({
           </DialogContent>
         </Dialog>
       )}
+      {isAdmin && (
+        <DeleteConfirmButton
+          label="Delete"
+          title="Delete task?"
+          description="This task will be permanently deleted."
+          onConfirm={onDelete}
+          disabled={deleting}
+        />
+      )}
     </div>
+  );
+}
+
+function DeleteConfirmButton({
+  label,
+  title,
+  description,
+  onConfirm,
+  disabled,
+}: {
+  label: string;
+  title: string;
+  description: string;
+  onConfirm: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <AlertDialog>
+      <AlertDialogTrigger asChild>
+        <Button size="sm" variant="destructive" className="gap-2" disabled={disabled}>
+          <Trash2 className="h-4 w-4" />
+          {label}
+        </Button>
+      </AlertDialogTrigger>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>Cancel</AlertDialogCancel>
+          <AlertDialogAction onClick={onConfirm}>Delete</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }
 
