@@ -83,7 +83,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             <img
               src={kuboLogo}
               alt="KUBO logo"
-              className="h-9 md:h-10 w-auto max-w-[160px] object-contain"
+              className="h-9 w-auto max-w-[160px] object-contain dark:invert md:h-10"
             />
           </Link>
           <div className="flex items-center gap-2">

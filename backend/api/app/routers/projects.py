@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Request
 
 from app.schemas.projects import CreateProjectRequest, UpdateProjectRequest
-from app.services.supabase_rest import insert_rows, select_rows, update_rows
+from app.services.supabase_rest import delete_rows, insert_rows, select_rows, update_rows
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -56,4 +56,12 @@ async def update_project(request: Request, project_id: str, body: UpdateProjectR
     {"deadline": body.deadline},
     filters={"id": project_id},
   )
+  return {"ok": True}
+
+
+@router.delete("/{project_id}")
+async def delete_project(request: Request, project_id: str) -> dict:
+  await delete_rows(request, "tasks", filters={"project_id": project_id})
+  await delete_rows(request, "project_members", filters={"project_id": project_id})
+  await delete_rows(request, "projects", filters={"id": project_id})
   return {"ok": True}
