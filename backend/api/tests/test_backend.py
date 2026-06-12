@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -16,6 +17,7 @@ sys.path.insert(0, str(API_ROOT))
 
 from app.main import app
 from app.services.supabase_rest import _send_request
+from app.services.week_calculator import completed_project_weeks
 
 
 class BackendTestCase(unittest.TestCase):
@@ -105,6 +107,18 @@ class BackendTestCase(unittest.TestCase):
       filters={"id": "user-1"},
       returning="id,first_name,last_name,email",
     )
+
+  def test_completed_project_weeks_are_based_on_project_creation_date(self) -> None:
+    created_at = datetime(2026, 1, 1, 9, 30, tzinfo=timezone.utc)
+    now = datetime(2026, 1, 15, 9, 30, tzinfo=timezone.utc)
+
+    weeks = completed_project_weeks(created_at, now)
+
+    self.assertEqual([week.week_number for week in weeks], [1, 2])
+    self.assertEqual(weeks[0].start, datetime(2026, 1, 1, 9, 30, tzinfo=timezone.utc))
+    self.assertEqual(weeks[0].next_start, datetime(2026, 1, 8, 9, 30, tzinfo=timezone.utc))
+    self.assertEqual(weeks[1].start, datetime(2026, 1, 8, 9, 30, tzinfo=timezone.utc))
+    self.assertEqual(weeks[1].next_start, datetime(2026, 1, 15, 9, 30, tzinfo=timezone.utc))
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
   "scripts": {
     "dev": "npm run dev --prefix frontend",
     "dev:frontend": "npm run dev --prefix frontend",
-    "dev:backend": "uvicorn app.main:app --app-dir backend/api --reload --host 0.0.0.0 --port 8000",
+    "dev:backend": "python -m uvicorn app.main:app --app-dir backend/api --reload --host 0.0.0.0 --port 8000",
     "build": "npm run build --prefix frontend",
     "lint": "npm run lint --prefix frontend",
     "preview": "npm run preview --prefix frontend"

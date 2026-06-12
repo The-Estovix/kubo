@@ -19,9 +19,10 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { ProgressBar } from "@/components/ProgressBar";
 import { StatusBadge, type TaskStatus } from "@/components/StatusBadge";
-import { ArrowLeft, Plus, Search, X, Check, Users, CalendarDays, Trash2 } from "lucide-react";
+import { ArrowLeft, Plus, Search, X, Check, Users, CalendarDays, Trash2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { formatDeadline, deadlineTone, deadlineLabel } from "@/lib/deadline";
 import { backendApi } from "@/lib/backend-api";
@@ -45,6 +46,31 @@ interface Task {
   assigned_by: string;
   project_id: string;
   deadline: string | null;
+}
+interface WeeklyReportSummary {
+  id: string;
+  project_id: string;
+  week_number: number;
+  week_start_date: string;
+  week_end_date: string;
+  total_tasks_created: number;
+  total_tasks_completed: number;
+  total_pending_tasks: number;
+  generated_at: string;
+}
+interface WeeklyReportTaskSnapshot {
+  id: string;
+  task_id: string | null;
+  task_title: string;
+  assigned_user_id: string | null;
+  assigned_user_name: string | null;
+  task_status: string;
+  activity_type: "CREATED" | "COMPLETED" | "PENDING";
+}
+interface WeeklyReportDetail extends WeeklyReportSummary {
+  created_tasks: WeeklyReportTaskSnapshot[];
+  completed_tasks: WeeklyReportTaskSnapshot[];
+  pending_tasks: WeeklyReportTaskSnapshot[];
 }
 
 function ProjectDetailPage() {
@@ -78,6 +104,16 @@ function ProjectDetailPage() {
     },
     enabled: !!session?.access_token,
     staleTime: 15_000,
+  });
+
+  const weeklyReportsQ = useQuery({
+    queryKey: ["weekly-reports", id],
+    queryFn: async () => {
+      const data = await backendApi.get<WeeklyReportSummary[]>(`/api/projects/${id}/weekly-reports`, session?.access_token);
+      return data ?? [];
+    },
+    enabled: !!session?.access_token,
+    staleTime: 60_000,
   });
 
   const profilesQ = useQuery({
@@ -306,6 +342,157 @@ function ProjectDetailPage() {
           </ul>
         </div>
       )}
+
+      <WeeklyActivityTimeline
+        projectId={id}
+        reports={weeklyReportsQ.data ?? []}
+        loading={weeklyReportsQ.isLoading}
+        token={session?.access_token}
+      />
+    </div>
+  );
+}
+
+function formatReportDate(value: string) {
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function WeeklyActivityTimeline({
+  projectId,
+  reports,
+  loading,
+  token,
+}: {
+  projectId: string;
+  reports: WeeklyReportSummary[];
+  loading: boolean;
+  token?: string;
+}) {
+  const [openReportId, setOpenReportId] = useState<string>("");
+
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="font-display text-xl font-semibold tracking-tight">Weekly Activity Timeline</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Historical weekly snapshots generated from this project&apos;s creation date.
+        </p>
+      </div>
+      {loading ? (
+        <div className="rounded-xl border border-border bg-card p-4 text-sm text-muted-foreground">
+          Loading weekly reports...
+        </div>
+      ) : reports.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-card/40 p-6 text-center text-sm text-muted-foreground">
+          No weekly reports have been generated yet.
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border border-border bg-card">
+          <Accordion type="single" collapsible value={openReportId} onValueChange={setOpenReportId}>
+            {reports.map((report) => (
+              <AccordionItem key={report.id} value={report.id} className="px-4">
+                <AccordionTrigger className="hover:no-underline">
+                  <div className="flex w-full flex-col gap-2 pr-3 text-left sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <div className="font-medium">Week {report.week_number}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatReportDate(report.week_start_date)} - {formatReportDate(report.week_end_date)}
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      <ReportCount label="Created" value={report.total_tasks_created} />
+                      <ReportCount label="Completed" value={report.total_tasks_completed} />
+                      <ReportCount label="Pending" value={report.total_pending_tasks} />
+                    </div>
+                  </div>
+                </AccordionTrigger>
+                <AccordionContent>
+                  <WeeklyReportDetails
+                    projectId={projectId}
+                    reportId={report.id}
+                    open={openReportId === report.id}
+                    token={token}
+                  />
+                </AccordionContent>
+              </AccordionItem>
+            ))}
+          </Accordion>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ReportCount({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-muted/50 px-2 py-1 text-center">
+      <div className="font-semibold text-foreground">{value}</div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+    </div>
+  );
+}
+
+function WeeklyReportDetails({
+  projectId,
+  reportId,
+  open,
+  token,
+}: {
+  projectId: string;
+  reportId: string;
+  open: boolean;
+  token?: string;
+}) {
+  const detailQ = useQuery({
+    queryKey: ["weekly-report", projectId, reportId],
+    queryFn: () => backendApi.get<WeeklyReportDetail>(`/api/projects/${projectId}/weekly-reports/${reportId}`, token),
+    enabled: open && !!token,
+    staleTime: 5 * 60_000,
+  });
+
+  if (detailQ.isLoading) {
+    return <div className="py-3 text-sm text-muted-foreground">Loading report details...</div>;
+  }
+  if (detailQ.isError) {
+    return <div className="py-3 text-sm text-destructive">{(detailQ.error as Error).message}</div>;
+  }
+
+  const report = detailQ.data;
+  if (!report) {
+    return <div className="py-3 text-sm text-muted-foreground">Open this week to load details.</div>;
+  }
+
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      <SnapshotList title="Created Tasks" tasks={report.created_tasks} />
+      <SnapshotList title="Completed Tasks" tasks={report.completed_tasks} />
+      <SnapshotList title="Pending Tasks" tasks={report.pending_tasks} />
+    </div>
+  );
+}
+
+function SnapshotList({ title, tasks }: { title: string; tasks: WeeklyReportTaskSnapshot[] }) {
+  return (
+    <div className="rounded-md border border-border p-3">
+      <div className="mb-2 text-sm font-medium">{title}</div>
+      {tasks.length === 0 ? (
+        <div className="text-xs text-muted-foreground">No tasks</div>
+      ) : (
+        <ul className="space-y-2">
+          {tasks.map((task) => (
+            <li key={task.id} className="text-sm">
+              <div className="font-medium">{task.task_title}</div>
+              <div className="text-xs text-muted-foreground">
+                {task.assigned_user_name ? `Assigned to ${task.assigned_user_name}` : "Unassigned"} - {task.task_status}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -328,6 +515,9 @@ function TaskActions({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Locked</span>
         {isAdmin && (
+          <EditTaskButton task={task} members={members} onUpdate={onUpdate} />
+        )}
+        {isAdmin && (
           <DeleteConfirmButton
             label="Delete"
             title="Delete task?"
@@ -347,6 +537,9 @@ function TaskActions({
       )}
       {task.status === "ACTIVE" && isMine && (
         <Button size="sm" onClick={() => onUpdate({ status: "COMPLETED" })}>Complete</Button>
+      )}
+      {isAdmin && (
+        <EditTaskButton task={task} members={members} onUpdate={onUpdate} />
       )}
       {isAdmin && (
         <Dialog open={reassignOpen} onOpenChange={setReassignOpen}>
@@ -379,6 +572,116 @@ function TaskActions({
         />
       )}
     </div>
+  );
+}
+
+function EditTaskButton({
+  task,
+  members,
+  onUpdate,
+}: {
+  task: Task;
+  members: Profile[];
+  onUpdate: (patch: Partial<Task>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [title, setTitle] = useState(task.title);
+  const [deadline, setDeadline] = useState(task.deadline ? task.deadline.slice(0, 10) : "");
+  const [assigneeId, setAssigneeId] = useState<string | null>(task.assignee_id);
+
+  const currentAssignee = assigneeId ? members.find((m) => m.id === assigneeId) ?? null : null;
+
+  const onOpen = (o: boolean) => {
+    if (o) {
+      setTitle(task.title);
+      setDeadline(task.deadline ? task.deadline.slice(0, 10) : "");
+      setAssigneeId(task.assignee_id);
+    }
+    setOpen(o);
+  };
+
+  const save = (e: FormEvent) => {
+    e.preventDefault();
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    onUpdate({
+      title: trimmed,
+      deadline: deadline ? new Date(deadline).toISOString() : null,
+      assignee_id: assigneeId,
+    });
+    setOpen(false);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpen}>
+      <DialogTrigger asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          className="h-8 w-8"
+          aria-label="Edit task"
+          title="Edit task"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Edit task</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={save} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor={`edit-title-${task.id}`}>Title</Label>
+            <Input
+              id={`edit-title-${task.id}`}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              autoFocus
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={`edit-deadline-${task.id}`}>
+              Deadline <span className="text-muted-foreground">(optional)</span>
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                id={`edit-deadline-${task.id}`}
+                type="date"
+                value={deadline}
+                onChange={(e) => setDeadline(e.target.value)}
+              />
+              {deadline && (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setDeadline("")}>
+                  Clear
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label>
+              Assign to <span className="text-muted-foreground">(optional, team only)</span>
+            </Label>
+            {currentAssignee ? (
+              <div className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2">
+                <div className="min-w-0 text-sm">
+                  <span className="font-medium">{currentAssignee.first_name} {currentAssignee.last_name}</span>
+                  <span className="ml-2 text-xs text-muted-foreground">{currentAssignee.email}</span>
+                </div>
+                <button type="button" onClick={() => setAssigneeId(null)} className="text-muted-foreground hover:text-foreground">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <AssigneePicker profiles={members} onPick={(p) => setAssigneeId(p.id)} />
+            )}
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={!title.trim()}>Save changes</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

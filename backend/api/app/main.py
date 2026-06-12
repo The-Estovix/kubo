@@ -1,19 +1,43 @@
 from contextlib import asynccontextmanager
+import asyncio
+import logging
 
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.core.config import FRONTEND_ORIGIN
-from app.routers import auth, chat, profiles, project_members, projects, reminders, tasks, users
+from app.core.config import FRONTEND_ORIGIN, WEEKLY_REPORT_SCHEDULER_INTERVAL_SECONDS
+from app.routers import auth, chat, profiles, project_members, projects, reminders, tasks, users, weekly_reports
+from app.services.weekly_report_service import generate_weekly_reports_with_client
+
+logger = logging.getLogger(__name__)
+
+
+async def weekly_report_scheduler(app: FastAPI) -> None:
+  while True:
+    try:
+      generated = await generate_weekly_reports_with_client(app.state.supabase_client)
+      if generated:
+        logger.info("Generated %s weekly project reports.", generated)
+    except asyncio.CancelledError:
+      raise
+    except Exception:
+      logger.exception("Weekly project report generation failed.")
+    await asyncio.sleep(WEEKLY_REPORT_SCHEDULER_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
   app.state.supabase_client = httpx.AsyncClient(timeout=45.0)
+  app.state.weekly_report_scheduler = asyncio.create_task(weekly_report_scheduler(app))
   try:
     yield
   finally:
+    app.state.weekly_report_scheduler.cancel()
+    try:
+      await app.state.weekly_report_scheduler
+    except asyncio.CancelledError:
+      pass
     await app.state.supabase_client.aclose()
 
 
@@ -49,3 +73,4 @@ app.include_router(project_members.router)
 app.include_router(tasks.router)
 app.include_router(chat.router)
 app.include_router(reminders.router)
+app.include_router(weekly_reports.router)
