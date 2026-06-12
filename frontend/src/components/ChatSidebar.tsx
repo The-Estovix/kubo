@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { MessageCircle, X, Search, Send, ArrowLeft, Globe, Bell, AlertTriangle, Clock, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import { daysUntil, formatDeadline, deadlineLabel, deadlineTone } from "@/lib/deadline";
@@ -469,7 +470,7 @@ export function ChatSidebar() {
                               </div>
                             )}
                             <div
-                              className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${
+                              className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm ${
                                 mine
                                   ? "bg-foreground text-background"
                                   : "bg-muted text-foreground"
@@ -495,7 +496,7 @@ export function ChatSidebar() {
                           className={`flex ${mine ? "justify-end" : "justify-start"}`}
                         >
                           <div
-                            className={`max-w-[80%] rounded-2xl px-3.5 py-2 text-sm ${
+                            className={`max-w-[80%] whitespace-pre-wrap break-words rounded-2xl px-3.5 py-2 text-sm ${
                               notif
                                 ? "border border-border bg-accent/40 text-foreground"
                                 : mine
@@ -515,12 +516,19 @@ export function ChatSidebar() {
                     e.preventDefault();
                     send();
                   }}
-                  className="flex items-center gap-2 border-t border-border p-3"
+                  className="flex items-end gap-2 border-t border-border p-3"
                 >
-                  <Input
+                  <Textarea
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        send();
+                      }
+                    }}
                     placeholder={isGlobal ? "Message everyone…" : "Type a message…"}
+                    className="min-h-10 max-h-28 resize-none"
                     autoFocus
                   />
                   <Button type="submit" size="icon" disabled={!draft.trim()}>

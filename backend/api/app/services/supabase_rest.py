@@ -7,7 +7,7 @@ from urllib.parse import quote
 import httpx
 from fastapi import HTTPException, Request
 
-from app.core.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_URL
+from app.core.config import SUPABASE_PUBLISHABLE_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +17,18 @@ def _build_headers(request: Request, extra: dict[str, str] | None = None) -> dic
   auth = request.headers.get("authorization")
   if auth:
     headers["authorization"] = auth
+  if extra:
+    headers.update(extra)
+  return headers
+
+
+def build_system_headers(extra: dict[str, str] | None = None) -> dict[str, str]:
+  if not SUPABASE_SERVICE_ROLE_KEY:
+    raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is required for system jobs.")
+  headers: dict[str, str] = {
+    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+    "authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+  }
   if extra:
     headers.update(extra)
   return headers
@@ -104,6 +116,35 @@ async def select_rows(
   return response.json()
 
 
+async def select_rows_with_client(
+  client: httpx.AsyncClient,
+  table: str,
+  select: str,
+  *,
+  headers: dict[str, str],
+  filters: dict[str, Any] | None = None,
+  order_by: str | None = None,
+  ascending: bool = True,
+  extra_params: list[tuple[str, str]] | None = None,
+) -> list[dict[str, Any]]:
+  params = [("select", select)]
+  if filters:
+    params.extend(_query_parts(filters))
+  if order_by:
+    params.append(("order", f"{order_by}.{'asc' if ascending else 'desc'}"))
+  if extra_params:
+    params.extend(extra_params)
+
+  response = await _send_request(
+    client.get(
+      f"{SUPABASE_URL}/rest/v1/{table}",
+      headers=headers,
+      params=params,
+    )
+  )
+  return response.json()
+
+
 async def insert_rows(
   request: Request,
   table: str,
@@ -116,6 +157,26 @@ async def insert_rows(
     _get_client(request).post(
       f"{SUPABASE_URL}/rest/v1/{table}",
       headers=headers,
+      params={"select": returning},
+      json=payload,
+    )
+  )
+  return response.json()
+
+
+async def insert_rows_with_client(
+  client: httpx.AsyncClient,
+  table: str,
+  payload: dict[str, Any] | list[dict[str, Any]],
+  *,
+  headers: dict[str, str],
+  returning: str = "*",
+) -> list[dict[str, Any]]:
+  request_headers = {**headers, "Prefer": "return=representation"}
+  response = await _send_request(
+    client.post(
+      f"{SUPABASE_URL}/rest/v1/{table}",
+      headers=request_headers,
       params={"select": returning},
       json=payload,
     )
